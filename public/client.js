@@ -92,7 +92,7 @@ if(!location.hash) {
   }
   
   function pageReady() { 
-      socket.on('connect', function() {
+      socket.on('connecty', function() {
           socket.emit('create/join', roomName); //send roomName to server
       });
   

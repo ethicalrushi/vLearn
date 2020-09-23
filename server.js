@@ -19,7 +19,7 @@ let nodeToRoomMapping = {};
 io.on('connection', function (socket) {
     console.log('Connection request recieved');
     console.log("socket id : ", socket.id)
-    socket.emit('connect');
+    socket.emit('connecty');
     socket.on("create/join", function (room) {       
         var myRoom = io.sockets.adapter.rooms[room] || { length: 0 };
         var numClients = myRoom.length;
