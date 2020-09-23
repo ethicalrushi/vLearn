@@ -19,6 +19,7 @@ let nodeToRoomMapping = {};
 io.on('connection', function (socket) {
     console.log('Connection request recieved');
     console.log("socket id : ", socket.id)
+    socket.emit('connect');
     socket.on("create/join", function (room) {       
         var myRoom = io.sockets.adapter.rooms[room] || { length: 0 };
         var numClients = myRoom.length;
@@ -28,7 +29,8 @@ io.on('connection', function (socket) {
             socket.join(room);
             let response = {
                 'room': room,
-                'nodeId' : socket.id
+                'nodeID' : socket.id,
+                'parentID': -1
             }
             socket.emit('created/joined', response);
         } 
@@ -39,8 +41,8 @@ io.on('connection', function (socket) {
             let parentId = nodeList[room][Math.floor((nodeList[room].length-2)/2)];
             let response = {
                 'room': room,
-                'nodeId':socket.id,
-                'parentId':parentId,              
+                'nodeID':socket.id,
+                'parentID':parentId,              
 
             }
             socket.emit('created/joined', response);
@@ -48,6 +50,7 @@ io.on('connection', function (socket) {
     });
 
     socket.on('message', function(event){
+        console.log(event);
         socket.broadcast.to(event.room).emit('message', event);
     });
 

@@ -1,132 +1,191 @@
-// getting dom elements
-var divSelectRoom = document.getElementById("selectRoom");
-var divConsultingRoom = document.getElementById("consultingRoom");
-var inputRoomNumber = document.getElementById("roomNumber");
-var btnGoRoom = document.getElementById("goRoom");
-var localVideo = document.getElementById("localVideo");
-var remoteVideo = document.getElementById("remoteVideo");
+if(!location.hash) {
+    location.hash = Math.floor(Math.random() * 0xFFFFFF).toString(16);
+  }
+  const roomHash = location.hash.substring(1);
+  
+  const roomName = 'observable-' + roomHash;
+  const configuration = {
+    iceServers: [{
+      urls: 'stun:stun.l.google.com:19302'
+    }],
+  };
+  
+  let nodeID;
+  let leftChildID = null;
+  let rightChildID = null;
+  let parentNodeID;
+  let isPresenter; //to be used in future
+  let isTeacher; //primary presenter
+  let connections = []; //can also use string keys like "parent", "left" instead of ids
+  let presenterStream = null;
 
-// variables
-var roomNumber;
-var localStream;
-var shareStream;
-var rtcPeerConnection;
-var iceServers = {
-    'iceServers': [
-        { 'urls': 'stun:stun.services.mozilla.com' },
-        { 'urls': 'stun:stun.l.google.com:19302' }
-    ]
-}
-var streamConstraints = { audio: true, video: true };
-var isCaller;
+  const socket = io.connect(); 
+  pageReady();
+  
+  function onSuccess() {};
+  
+  function onError(error) {
+    console.error(error);
+  };
+  
+  function setupParentNode(id) {
+    connections[id] = new RTCPeerConnection(configuration);
 
-// Let's do this
-var socket = io();
-
-btnGoRoom.onclick = function () {
-    if (inputRoomNumber.value === '') {
-        alert("Please type a room number")
-    } else {
-        roomNumber = inputRoomNumber.value;
-        socket.emit('create or join', roomNumber);
-        divSelectRoom.style = "display: none;";
-        divConsultingRoom.style = "display: block;";
+    connections[id].onicecandidate = event => {
+      if (event.candidate) {
+          sendMessage({'candidate': event.candidate}, "candidate", id);
+      }
+    };
+  
+    connections[id].ontrack = event => {
+        const recievedStream = event.streams[0];
+        console.log("recieved stream from parent->", recievedStream);
+        console.log(remoteVideo.srcObject, remoteVideo);
+        console.log(recievedStream.getTracks());
+        if (!remoteVideo.srcObject || remoteVideo.srcObject.id !== recievedStream.id) {
+            remoteVideo.srcObject = recievedStream;
+          }
+  
+        if(presenterStream==null) {
+          presenterStream = recievedStream;
+        }
+    };
+  }
+  
+  function setupChildNeighbour(id) {
+      connections[id] = new RTCPeerConnection(configuration);
+      console.log("presenterStream in child setup", presenterStream);
+      if(presenterStream!=null) {
+          presenterStream.getTracks().forEach(track => connections[id].addTrack(track, presenterStream));
+      }
+  
+      connections[id].onicecandidate = event => {
+          if (event.candidate) {
+              sendMessage({'candidate': event.candidate}, "candidate", id);
+          }
+      };
+  
+      connections[id].ontrack = event => {
+          const recievedStream = event.streams[0];
+          console.log("recieved stream from child", recievedStream);
+      };
+  }
+  
+  function sendMessage(msg, msgType, id) {
+    let newMessage = {
+      sourceID: nodeID,
+      destinationID : id,
+      type: msgType,
+      room : roomName,
+      message: msg
     }
-};
+    console.log("sending-> ",newMessage);
+    socket.emit('message', newMessage);
+  }
+    
+  function sendOffer(id) {
+    connections[id].createOffer().then(function(description) {
+      connections[id].setLocalDescription(description).then(function() {
+        sendMessage({'sdp': connections[id].localDescription}, "sdp", id);
+      }).catch(onError);
+    }); 
+  }
+  
+  function pageReady() { 
+      socket.on('connect', function() {
+          socket.emit('create/join', roomName); //send roomName to server
+      });
+  
+      socket.on('created/joined', function(data) { //get currentId from server
+        console.log(data);
+          nodeID = data.nodeID;
+          parentNodeID = data.parentID; //let -1 be default 
+  
+          if(parentNodeID!=-1) {
+              setupParentNode(parentNodeID);
+  
+              //send member_ready message to parent
+              sendMessage("memberReady", "memberReady", parentNodeID);
+          }
+  
+          if(nodeID==0 || parentNodeID==-1) { // or parent is neg
+              isTeacher = true; //temporarily making 0 as teacher
+          }
 
-// message handlers
-socket.on('created', function (room) {
-    navigator.mediaDevices.getUserMedia(streamConstraints).then(function (stream) {
-        localStream = stream;
-        localVideo.srcObject = stream;
-        isCaller = true;
-    }).catch(function (err) {
-        console.log('An error ocurred when accessing media devices', err);
-    });
-});
-
-socket.on('joined', function (room) {
-    navigator.mediaDevices.getUserMedia(streamConstraints).then(function (stream) {
-        localStream = stream;
-        localVideo.srcObject = stream;
-        socket.emit('ready', roomNumber);
-    }).catch(function (err) {
-        console.log('An error ocurred when accessing media devices', err);
-    });
-});
-
-socket.on('candidate', function (event) {
-    var candidate = new RTCIceCandidate({
-        sdpMLineIndex: event.label,
-        candidate: event.candidate
-    });
-    rtcPeerConnection.addIceCandidate(candidate);
-});
-
-socket.on('ready', function () {
-    if (isCaller) {
-        rtcPeerConnection = new RTCPeerConnection(iceServers);
-        rtcPeerConnection.onicecandidate = onIceCandidate;
-        rtcPeerConnection.ontrack = onAddStream;
-        rtcPeerConnection.addTrack(localStream.getTracks()[0], localStream);
-        rtcPeerConnection.addTrack(localStream.getTracks()[1], localStream);
-        rtcPeerConnection.createOffer()
-            .then(sessionDescription => {
-                rtcPeerConnection.setLocalDescription(sessionDescription);
-                socket.emit('offer', {
-                    type: 'offer',
-                    sdp: sessionDescription,
-                    room: roomNumber
-                });
-            })
-            .catch(error => {
-                console.log(error)
-            })
-    }
-});
-
-socket.on('offer', function (event) {
-    if (!isCaller) {
-        rtcPeerConnection = new RTCPeerConnection(iceServers);
-        rtcPeerConnection.onicecandidate = onIceCandidate;
-        rtcPeerConnection.ontrack = onAddStream;
-        rtcPeerConnection.addTrack(localStream.getTracks()[0], localStream);
-        rtcPeerConnection.addTrack(localStream.getTracks()[1], localStream);
-        rtcPeerConnection.setRemoteDescription(new RTCSessionDescription(event));
-        rtcPeerConnection.createAnswer()
-            .then(sessionDescription => {
-                rtcPeerConnection.setLocalDescription(sessionDescription);
-                socket.emit('answer', {
-                    type: 'answer',
-                    sdp: sessionDescription,
-                    room: roomNumber
-                });
-            })
-            .catch(error => {
-                console.log(error)
-            })
-    }
-});
-
-socket.on('answer', function (event) {
-    rtcPeerConnection.setRemoteDescription(new RTCSessionDescription(event));
-})
-
-// handler functions
-function onIceCandidate(event) {
-    if (event.candidate) {
-        console.log('sending ice candidate');
-        socket.emit('candidate', {
-            type: 'candidate',
-            label: event.candidate.sdpMLineIndex,
-            id: event.candidate.sdpMid,
-            candidate: event.candidate.candidate,
-            room: roomNumber
-        })
-    }
-}
-
-function onAddStream(event) {
-    remoteVideo.srcObject = event.streams[0];
-    remoteStream = event.stream;
-}
+          if(isTeacher) {
+            navigator.mediaDevices.getUserMedia({
+                audio: true,
+                video: true,
+              }).then(stream => {
+    
+                localVideo.srcObject = stream;
+                presenterStream = stream;
+                console.log("stream from presneter funcn",presenterStream);
+            });
+        }
+      });
+      
+      socket.on('message', function(data) {
+          console.log("recieved -> ", data);
+          let senderID = data.sourceID;
+          let intendedRecieverID = data.destinationID;
+  
+          if(nodeID != intendedRecieverID) {
+              return;
+          }
+  
+          /**
+           * Type: memberReady -> Recieved ready message from child
+           * Action: setup connection object and send offer to that child
+           */
+          
+           //should take left or right from server
+          if(data.type=="memberReady") {
+  
+              if(leftChildID == null) {
+                  console.log("setting up left child");
+                  leftChildID = senderID;
+                  setupChildNeighbour(leftChildID);
+              }
+              else {
+                console.log("setting up right child");
+                  rightChildID = senderID;
+                  setupChildNeighbour(rightChildID);
+              }
+  
+              sendOffer(senderID);
+          }
+  
+          /**
+           * Type: sdp
+           * Action: if it is an offer, create and send an answer back
+           */
+  
+          if(data.type=="sdp") {
+              let message = data.message;
+              console.log(senderID);
+              connections[senderID].setRemoteDescription(new RTCSessionDescription(message.sdp), () => {
+                  if (connections[senderID].remoteDescription.type === 'offer') {
+                      connections[senderID].createAnswer().then(function(description) {
+                          connections[senderID].setLocalDescription(description).then(function() {
+                          sendMessage({'sdp': connections[senderID].localDescription}, "sdp", senderID);
+                          }).catch(onError);
+                      });
+                  }
+              }, onError);
+          }
+  
+          /**
+           * Type: candidate
+           * Action: add the recieved iceCandidate
+           */
+          if(data.type=="candidate") {
+              let message = data.message;
+              connections[senderID].addIceCandidate(
+                  new RTCIceCandidate(message.candidate), onSuccess, onError
+              );
+          }
+  
+      });
+  
+  }
